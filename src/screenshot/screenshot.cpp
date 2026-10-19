@@ -20,6 +20,8 @@ namespace
     static bool* control_shm = nullptr;
     static bool last_control_state = false;
     static int screenshot_count = 0;
+    static unsigned int runtime_generation = 0;
+    static unsigned int frames_after_runtime_init = 0;
 }
 
 namespace screenshot
@@ -128,6 +130,16 @@ namespace screenshot
         }
 
         const size_t pixel_count = static_cast<size_t>(width) * height;
+        if (frames_after_runtime_init < 5)
+        {
+            char buffer[256];
+            wsprintfA(buffer, "KKReshade diagnostic: generation=%u frame_after_init=%u capture_frame=%d size=%ux%u format=%u",
+                runtime_generation, frames_after_runtime_init + 1, screenshot_count + 1, width, height,
+                static_cast<unsigned int>(backbuffer_desc.texture.format));
+            reshade::log::message(reshade::log::level::info, buffer);
+        }
+        ++frames_after_runtime_init;
+
         if (backbuffer_desc.texture.format == reshade::api::format::r16g16b16a16_float)
         {
             // ReShade's capture_screenshot waits for the current back buffer and returns
@@ -159,13 +171,37 @@ namespace screenshot
 
     void on_init_effect_runtime(const reshade::api::effect_runtime* runtime)
     {
-        runtime->get_screenshot_width_and_height(&shm->width, &shm->height);
+        ++runtime_generation;
+        frames_after_runtime_init = 0;
+
+        uint32_t width = 0;
+        uint32_t height = 0;
+        runtime->get_screenshot_width_and_height(&width, &height);
+
+        if (shm != nullptr)
+        {
+            shm->width = width;
+            shm->height = height;
+        }
+
+        char buffer[256];
+        wsprintfA(buffer, "KKReshade diagnostic: runtime INIT generation=%u size=%ux%u capture_enabled=%u",
+            runtime_generation, width, height, (control_shm && *control_shm) ? 1u : 0u);
+        reshade::log::message(reshade::log::level::info, buffer);
     }
 
     void on_destroy_effect_runtime(reshade::api::effect_runtime* runtime)
     {
-        shm->width = 0;
-        shm->height = 0;
+        char buffer[256];
+        wsprintfA(buffer, "KKReshade diagnostic: runtime DESTROY generation=%u captured_frames=%d",
+            runtime_generation, screenshot_count);
+        reshade::log::message(reshade::log::level::warning, buffer);
+
+        if (shm != nullptr)
+        {
+            shm->width = 0;
+            shm->height = 0;
+        }
     }
 
     void start()
