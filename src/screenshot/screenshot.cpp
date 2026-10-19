@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <vector>
 
 #define SCREENSHOT_SHM_NAME "KKReshade_Screenshot_SHM"
@@ -22,6 +23,31 @@ namespace
     static int screenshot_count = 0;
     static unsigned int runtime_generation = 0;
     static unsigned int frames_after_runtime_init = 0;
+    static unsigned int technique_probe_counter = 0;
+    static unsigned int technique_probe_generation = 0;
+    static unsigned int technique_probe_matches = 0;
+
+    static void probe_technique(reshade::api::effect_runtime* runtime, reshade::api::effect_technique technique, void* user_data)
+    {
+        char technique_name[256] = {};
+        char effect_name[256] = {};
+        runtime->get_technique_name(technique, technique_name);
+        runtime->get_technique_effect_name(technique, effect_name);
+
+        if (_stricmp(effect_name, "DLSS5_Feed.fx") != 0 &&
+            strstr(effect_name, "DLSS5") == nullptr && strstr(effect_name, "dlss5") == nullptr &&
+            strstr(technique_name, "DLSS5") == nullptr && strstr(technique_name, "dlss5") == nullptr &&
+            strstr(effect_name, "Feed") == nullptr && strstr(effect_name, "feed") == nullptr &&
+            strstr(technique_name, "Feed") == nullptr && strstr(technique_name, "feed") == nullptr)
+            return;
+
+        ++technique_probe_matches;
+        char buffer[768];
+        wsprintfA(buffer, "KKReshade diagnostic: DLSS5_FEED_TECH generation=%u effect=%s technique=%s enabled=%u effects_enabled=%u",
+            technique_probe_generation, effect_name, technique_name,
+            runtime->get_technique_state(technique) ? 1u : 0u, runtime->get_effects_state() ? 1u : 0u);
+        reshade::log::message(reshade::log::level::info, buffer);
+    }
 }
 
 namespace screenshot
@@ -139,6 +165,24 @@ namespace screenshot
             reshade::log::message(reshade::log::level::info, buffer);
         }
         ++frames_after_runtime_init;
+
+        // Probe during the first frames after every runtime creation, then periodically.
+        // This increases the chance of catching a short effect-reload window without
+        // changing effect state, technique order, or rendering behavior.
+        const bool probe_early_frames = frames_after_runtime_init <= 10;
+        const bool probe_periodic = (++technique_probe_counter >= 60);
+        if (probe_early_frames || probe_periodic)
+        {
+            if (probe_periodic)
+                technique_probe_counter = 0;
+            technique_probe_generation = runtime_generation;
+            technique_probe_matches = 0;
+            runtime->enumerate_techniques(nullptr, probe_technique, nullptr);
+            char probe_buffer[256];
+            wsprintfA(probe_buffer, "KKReshade diagnostic: DLSS5_FEED_PROBE generation=%u frame_after_init=%u matches=%u effects_enabled=%u",
+                runtime_generation, frames_after_runtime_init, technique_probe_matches, runtime->get_effects_state() ? 1u : 0u);
+            reshade::log::message(reshade::log::level::info, probe_buffer);
+        }
 
         if (backbuffer_desc.texture.format == reshade::api::format::r16g16b16a16_float)
         {
